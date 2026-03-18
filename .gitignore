@@ -1,0 +1,27 @@
+# Contratos gerados e uploads temporários
+contratos_prontos/
+uploads/
+
+# Templates de contrato (arquivos institucionais — não versionar)
+contratos_base/
+
+# Dados OCR (arquivo grande — instalar localmente)
+tessdata/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace

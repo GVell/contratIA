@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ContratIA</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style_v2.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>🎓 ContratIA</h1>
+            <p class="subtitle">Processamento de Contratos em Lote</p>
+        </header>
+
+        <!-- Área de Upload -->
+        <section class="upload-section" id="uploadSection">
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">📁</div>
+                <h2>Adicione aqui os REQUERIMENTOS</h2>
+                <p>ou clique para selecionar múltiplos arquivos</p>
+                <input type="file" id="fileInput" multiple accept=".pdf" style="display: none;">
+                <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                    Selecionar Arquivos
+                </button>
+            </div>
+        </section>
+
+        <!-- Loading -->
+        <div class="loading" id="loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Analisando PDFs...</p>
+        </div>
+
+        <!-- Tabela de Alunos -->
+        <section class="students-section" id="studentsSection" style="display: none;">
+            <div class="section-header">
+                <h2>📋 Alunos Detectados</h2>
+                <p class="info-text">Revise os dados extraídos e selecione o tipo de contrato para cada aluno</p>
+            </div>
+
+            <div class="table-container">
+                <table class="students-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Nome do Aluno</th>
+                            <th>Nome do Arquivo Final</th>
+                            <th>Tipo de Contrato</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="studentsTableBody">
+                        <!-- Linhas serão inseridas via JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="actions-bar">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="groupSiblings" style="width: 20px; height: 20px; cursor: pointer;">
+                    <label for="groupSiblings" style="cursor: pointer; font-weight: 500;">
+                        Agrupar irmãos em um único PDF
+                    </label>
+                </div>
+                <div style="display: flex; gap: 15px;">
+                    <button class="btn btn-secondary" onclick="cancelProcess()">
+                        ❌ Cancelar
+                    </button>
+                    <button class="btn btn-success" onclick="processAll()">
+                        ✅ Processar Todos (<span id="totalStudents">0</span>)
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Resultados -->
+        <section class="results-section" id="resultsSection" style="display: none;">
+            <div class="section-header">
+                <h2>✅ Processamento Concluído</h2>
+            </div>
+
+            <div class="summary-cards">
+                <div class="summary-card success">
+                    <div class="card-value" id="successCount">0</div>
+                    <div class="card-label">Sucesso</div>
+                </div>
+                <div class="summary-card error">
+                    <div class="card-value" id="errorCount">0</div>
+                    <div class="card-label">Erros</div>
+                </div>
+                <div class="summary-card total">
+                    <div class="card-value" id="totalCount">0</div>
+                    <div class="card-label">Total</div>
+                </div>
+            </div>
+
+            <div class="results-list" id="resultsList">
+                <!-- Resultados serão inseridos via JavaScript -->
+            </div>
+
+            <div class="actions-bar">
+                <button class="btn btn-primary" onclick="resetApp()">
+                    🔄 Processar Novos Contratos
+                </button>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        let studentsData = [];
+        
+        // Configurar drag and drop
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('drag-over');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('drag-over');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+            const files = e.dataTransfer.files;
+            handleFiles(files);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+        });
+
+        async function handleFiles(files) {
+            if (files.length === 0) {
+                showAlert('Nenhum arquivo selecionado', 'error');
+                return;
+            }
+
+            // Validar que todos são PDFs
+            const pdfFiles = Array.from(files).filter(file => file.name.endsWith('.pdf'));
+            
+            if (pdfFiles.length === 0) {
+                showAlert('Nenhum arquivo PDF foi selecionado', 'error');
+                return;
+            }
+
+            if (pdfFiles.length < files.length) {
+                showAlert(`${files.length - pdfFiles.length} arquivo(s) ignorado(s) (apenas PDFs são aceitos)`, 'warning');
+            }
+
+            // Mostrar loading
+            document.getElementById('uploadSection').style.display = 'none';
+            document.getElementById('loading').style.display = 'block';
+
+            // Criar FormData
+            const formData = new FormData();
+            pdfFiles.forEach(file => {
+                formData.append('files[]', file);
+            });
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    studentsData = data.students;
+                    displayStudents(data.students);
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('studentsSection').style.display = 'block';
+                } else {
+                    throw new Error(data.error || 'Erro ao processar arquivos');
+                }
+
+            } catch (error) {
+                console.error('Erro:', error);
+                showAlert(`Erro ao enviar arquivos: ${error.message}`, 'error');
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('uploadSection').style.display = 'block';
+            }
+        }
+
+        function displayStudents(students) {
+            const tbody = document.getElementById('studentsTableBody');
+            tbody.innerHTML = '';
+
+            students.forEach((student, index) => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>
+                        <div class="student-name">${student.student_name}</div>
+                        <div class="original-file">${student.original_filename}</div>
+                    </td>
+                    <td>
+                        <input type="text" 
+                               class="input-filename" 
+                               value="${student.suggested_filename}"
+                               data-index="${index}"
+                               onchange="updateFilename(${index}, this.value)">
+                    </td>
+                    <td>
+                        <select class="select-contract" 
+                                data-index="${index}"
+                                onchange="updateContractType(${index}, this.value)">
+                            <option value="infantil_fund1_fund2" ${student.contract_type === 'infantil_fund1_fund2' ? 'selected' : ''}>
+                                📚 Ed. Infantil / Fund. I / Fund. II
+                            </option>
+                            <option value="medio" ${student.contract_type === 'medio' ? 'selected' : ''}>
+                                🎓 Ensino Médio
+                            </option>
+                        </select>
+                    </td>
+                    <td>
+                        <button class="btn-icon" onclick="removeStudent(${index})" title="Remover">
+                            🗑️
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            document.getElementById('totalStudents').textContent = students.length;
+        }
+
+        function updateFilename(index, newName) {
+            if (studentsData[index]) {
+                studentsData[index].suggested_filename = newName;
+            }
+        }
+
+        function updateContractType(index, contractType) {
+            if (studentsData[index]) {
+                studentsData[index].contract_type = contractType;
+            }
+        }
+
+        function removeStudent(index) {
+            studentsData.splice(index, 1);
+            displayStudents(studentsData);
+            
+            if (studentsData.length === 0) {
+                cancelProcess();
+            }
+        }
+
+        function cancelProcess() {
+            studentsData = [];
+            document.getElementById('studentsSection').style.display = 'none';
+            document.getElementById('uploadSection').style.display = 'block';
+            fileInput.value = '';
+        }
+
+        async function processAll() {
+            if (studentsData.length === 0) {
+                showAlert('Nenhum aluno para processar', 'error');
+                return;
+            }
+
+            // Verificar se deve agrupar irmãos
+            const groupSiblings = document.getElementById('groupSiblings').checked;
+
+            // Preparar dados para envio
+            const processData = studentsData.map(student => ({
+                student_name: student.student_name,
+                temp_filepath: student.temp_filepath,
+                final_filename: student.suggested_filename,
+                contract_type: student.contract_type
+            }));
+
+            // Mostrar loading
+            document.getElementById('studentsSection').style.display = 'none';
+            document.getElementById('loading').querySelector('p').textContent = groupSiblings ? 
+                'Agrupando contratos dos irmãos...' : 'Processando contratos...';
+            document.getElementById('loading').style.display = 'block';
+
+            try {
+                const response = await fetch('/process', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        students: processData,
+                        group_siblings: groupSiblings
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    displayResults(data);
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('resultsSection').style.display = 'block';
+                } else {
+                    throw new Error(data.error || 'Erro ao processar contratos');
+                }
+
+            } catch (error) {
+                console.error('Erro:', error);
+                showAlert(`Erro ao processar contratos: ${error.message}`, 'error');
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('studentsSection').style.display = 'block';
+            }
+        }
+
+        function displayResults(data) {
+            document.getElementById('successCount').textContent = data.successful;
+            document.getElementById('errorCount').textContent = data.failed;
+            document.getElementById('totalCount').textContent = data.total;
+
+            const resultsList = document.getElementById('resultsList');
+            resultsList.innerHTML = '';
+
+            data.results.forEach(result => {
+                const resultItem = document.createElement('div');
+                resultItem.className = `result-item ${result.success ? 'success' : 'error'}`;
+                
+                if (result.success) {
+                    resultItem.innerHTML = `
+                        <div class="result-icon">✅</div>
+                        <div class="result-info">
+                            <div class="result-name">${result.student_name}</div>
+                            <div class="result-filename">${result.filename}</div>
+                        </div>
+                        <button class="btn btn-download" onclick="downloadFile('${result.filename}')">
+                            ⬇️ Baixar
+                        </button>
+                    `;
+                } else {
+                    resultItem.innerHTML = `
+                        <div class="result-icon">❌</div>
+                        <div class="result-info">
+                            <div class="result-name">${result.student_name}</div>
+                            <div class="result-error">${result.error || 'Erro desconhecido'}</div>
+                        </div>
+                    `;
+                }
+                
+                resultsList.appendChild(resultItem);
+            });
+        }
+
+        function downloadFile(filename) {
+            window.location.href = `/download/${filename}`;
+        }
+
+        function resetApp() {
+            studentsData = [];
+            document.getElementById('resultsSection').style.display = 'none';
+            document.getElementById('uploadSection').style.display = 'block';
+            fileInput.value = '';
+        }
+
+        function showAlert(message, type = 'info') {
+            // Criar elemento de alerta
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type}`;
+            alert.textContent = message;
+            
+            // Adicionar ao body
+            document.body.appendChild(alert);
+            
+            // Animar entrada
+            setTimeout(() => alert.classList.add('show'), 10);
+            
+            // Remover após 3 segundos
+            setTimeout(() => {
+                alert.classList.remove('show');
+                setTimeout(() => alert.remove(), 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html>

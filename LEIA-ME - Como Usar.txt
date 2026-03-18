@@ -1,0 +1,52 @@
+============================================================
+  ContratIA v2.0 - Guia Rapido de Uso
+============================================================
+
+COMO INICIAR O SISTEMA:
+
+  1. Clique 2x em "Iniciar ContratIA.bat"
+  2. O navegador abrira automaticamente
+  3. Pronto! Interface estara disponivel
+
+COMO USAR:
+
+  1. Arraste PDFs de requerimento para area de upload
+  2. Sistema detecta automaticamente o tipo de contrato
+  3. Revise os dados (edite se necessario)
+  4. Clique em "Processar Todos"
+  5. Baixe os contratos prontos
+
+COMO PARAR O SISTEMA:
+
+  - Feche a janela preta (terminal)
+  - OU pressione Ctrl+C na janela
+
+ARQUIVOS IMPORTANTES:
+
+  - "Iniciar ContratIA.bat" = Iniciar sistema
+  - app_v2.py = Codigo principal
+  - contratos_base/ = Templates de contrato
+  - contratos_prontos/ = Contratos gerados
+  - tessdata/ = Dados de OCR (nao deletar!)
+
+REQUISITOS:
+
+  - Python 3.7+
+  - Tesseract OCR (ja instalado)
+  - Dependencias: Flask, PyMuPDF, pytesseract
+
+PERFORMANCE:
+
+  - ~1-1.5 segundos por PDF
+  - Deteccao automatica via OCR
+  - Processamento em lote
+
+SUPORTE:
+
+  - README_v2.md = Documentacao completa
+  - TESTE_DETECCAO.md = Guia de testes
+
+============================================================
+  Desenvolvido com OCR otimizado
+  Versao: 2.0
+============================================================
