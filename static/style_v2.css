@@ -247,6 +247,162 @@ section {
 }
 
 /* =========================================
+   GRUPOS DE ALUNOS (FAMÍLIAS)
+========================================= */
+.groups-container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    margin-bottom: 30px;
+}
+
+.group-card {
+    background: var(--bg-primary);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-md);
+    padding: 20px;
+}
+
+.group-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.group-header-main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.group-badge {
+    background: var(--primary-color);
+    color: white;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.group-original-file {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.group-merge-row {
+    margin-bottom: 12px;
+}
+
+.merge-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 0.95rem;
+}
+
+.merge-toggle input {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+.group-output-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.group-output-row label {
+    font-weight: 600;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
+.group-output-row .input-filename {
+    flex: 1;
+}
+
+.sub-table {
+    box-shadow: none;
+}
+
+.sub-table thead {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.sub-table th {
+    text-transform: none;
+    font-size: 0.85rem;
+    letter-spacing: 0;
+}
+
+.sub-table td {
+    padding: 12px 10px;
+}
+
+.pages-col {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.student-name-input {
+    font-weight: 600;
+}
+
+.totals-info {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* =========================================
+   REVISÃO MANUAL (tipo de contrato não detectado)
+========================================= */
+.review-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    background: #fffbeb;
+    border: 1px solid var(--warning-color);
+    color: #92400e;
+    border-radius: var(--border-radius-sm);
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+.review-banner-icon {
+    font-size: 1.2rem;
+}
+
+.students-table tbody tr.needs-review {
+    background: #fffbeb;
+}
+
+.students-table tbody tr.needs-review:hover {
+    background: #fef3c7;
+}
+
+.review-tag {
+    margin-top: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #b45309;
+}
+
+.select-needs-review {
+    border-color: var(--warning-color) !important;
+    background: #fffbeb;
+}
+
+/* =========================================
    INPUTS E SELECTS
 ========================================= */
 .input-filename,

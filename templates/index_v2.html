@@ -33,43 +33,29 @@
             <p>Analisando PDFs...</p>
         </div>
 
-        <!-- Tabela de Alunos -->
+        <!-- Grupos de Alunos (famílias) -->
         <section class="students-section" id="studentsSection" style="display: none;">
             <div class="section-header">
-                <h2>📋 Alunos Detectados</h2>
-                <p class="info-text">Revise os dados extraídos e selecione o tipo de contrato para cada aluno</p>
+                <h2>📋 Requerimentos Detectados</h2>
+                <p class="info-text">Cada arquivo é uma família — um requerimento por página. Revise nome, segmento e o nome do PDF final antes de processar.</p>
             </div>
 
-            <div class="table-container">
-                <table class="students-table">
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Nome do Aluno</th>
-                            <th>Nome do Arquivo Final</th>
-                            <th>Tipo de Contrato</th>
-                            <th>Ações</th>
-                        </tr>
-                    </thead>
-                    <tbody id="studentsTableBody">
-                        <!-- Linhas serão inseridas via JavaScript -->
-                    </tbody>
-                </table>
+            <div class="review-banner" id="reviewBanner" style="display: none;"></div>
+
+            <div class="groups-container" id="groupsContainer">
+                <!-- Cards de grupo serão inseridos via JavaScript -->
             </div>
 
             <div class="actions-bar">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <input type="checkbox" id="groupSiblings" style="width: 20px; height: 20px; cursor: pointer;">
-                    <label for="groupSiblings" style="cursor: pointer; font-weight: 500;">
-                        Agrupar irmãos em um único PDF
-                    </label>
+                <div class="totals-info">
+                    <span id="totalGroups">0</span> família(s) · <span id="totalStudents">0</span> aluno(s)
                 </div>
                 <div style="display: flex; gap: 15px;">
                     <button class="btn btn-secondary" onclick="cancelProcess()">
                         ❌ Cancelar
                     </button>
                     <button class="btn btn-success" onclick="processAll()">
-                        ✅ Processar Todos (<span id="totalStudents">0</span>)
+                        ✅ Processar Todos
                     </button>
                 </div>
             </div>
@@ -109,8 +95,8 @@
     </div>
 
     <script>
-        let studentsData = [];
-        
+        let groupsData = [];
+
         // Configurar drag and drop
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
@@ -172,8 +158,8 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    studentsData = data.students;
-                    displayStudents(data.students);
+                    groupsData = data.groups;
+                    displayGroups();
                     document.getElementById('loading').style.display = 'none';
                     document.getElementById('studentsSection').style.display = 'block';
                 } else {
@@ -188,98 +174,209 @@
             }
         }
 
-        function displayStudents(students) {
-            const tbody = document.getElementById('studentsTableBody');
-            tbody.innerHTML = '';
+        const CONTRACT_OPTIONS = [
+            { value: 'infantil_fund1_fund2', label: '📚 Ed. Infantil / Fund. I / Fund. II' },
+            { value: 'medio', label: '🎓 Ensino Médio' }
+        ];
 
-            students.forEach((student, index) => {
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${index + 1}</td>
-                    <td>
-                        <div class="student-name">${student.student_name}</div>
-                        <div class="original-file">${student.original_filename}</div>
-                    </td>
-                    <td>
-                        <input type="text" 
-                               class="input-filename" 
-                               value="${student.suggested_filename}"
-                               data-index="${index}"
-                               onchange="updateFilename(${index}, this.value)">
-                    </td>
-                    <td>
-                        <select class="select-contract" 
-                                data-index="${index}"
-                                onchange="updateContractType(${index}, this.value)">
-                            <option value="infantil_fund1_fund2" ${student.contract_type === 'infantil_fund1_fund2' ? 'selected' : ''}>
-                                📚 Ed. Infantil / Fund. I / Fund. II
-                            </option>
-                            <option value="medio" ${student.contract_type === 'medio' ? 'selected' : ''}>
-                                🎓 Ensino Médio
-                            </option>
-                        </select>
-                    </td>
-                    <td>
-                        <button class="btn-icon" onclick="removeStudent(${index})" title="Remover">
-                            🗑️
-                        </button>
-                    </td>
+        function contractSelectHtml(groupIndex, studentIndex, contractType) {
+            const needsReview = !contractType;
+            const options = CONTRACT_OPTIONS.map(opt => `
+                <option value="${opt.value}" ${contractType === opt.value ? 'selected' : ''}>${opt.label}</option>
+            `).join('');
+            return `
+                <select class="select-contract ${needsReview ? 'select-needs-review' : ''}"
+                        onchange="updateContractType(${groupIndex}, ${studentIndex}, this.value)">
+                    <option value="" ${needsReview ? 'selected' : ''} disabled>⚠️ Selecione o tipo...</option>
+                    ${options}
+                </select>
+            `;
+        }
+
+        function displayGroups() {
+            const container = document.getElementById('groupsContainer');
+            container.innerHTML = '';
+
+            groupsData.forEach((group, groupIndex) => {
+                const card = document.createElement('div');
+                card.className = 'group-card';
+
+                const multiStudent = group.students.length > 1;
+
+                const rows = group.students.map((student, studentIndex) => {
+                    const needsReview = !student.contract_type;
+                    return `
+                        <tr class="${needsReview ? 'needs-review' : ''}">
+                            <td>
+                                <input type="text"
+                                       class="input-filename student-name-input"
+                                       value="${student.student_name}"
+                                       onchange="updateStudentName(${groupIndex}, ${studentIndex}, this.value)">
+                                ${needsReview ? '<div class="review-tag">⚠️ Curso não detectado — confira o requerimento</div>' : ''}
+                            </td>
+                            <td class="pages-col">pág. ${student.page_start + 1}${student.page_end !== student.page_start ? '–' + (student.page_end + 1) : ''}</td>
+                            <td>${contractSelectHtml(groupIndex, studentIndex, student.contract_type)}</td>
+                            <td>
+                                <input type="text"
+                                       class="input-filename"
+                                       value="${student.individual_filename}"
+                                       ${group.merge ? 'disabled' : ''}
+                                       onchange="updateIndividualFilename(${groupIndex}, ${studentIndex}, this.value)">
+                            </td>
+                            <td>
+                                <button class="btn-icon" onclick="removeStudent(${groupIndex}, ${studentIndex})" title="Remover">🗑️</button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+
+                card.innerHTML = `
+                    <div class="group-header">
+                        <div class="group-header-main">
+                            <span class="group-badge">${group.students.length} aluno${multiStudent ? 's' : ''}</span>
+                            <span class="group-original-file">${group.original_filename}</span>
+                        </div>
+                        <button class="btn-icon" onclick="removeGroup(${groupIndex})" title="Remover família">🗑️</button>
+                    </div>
+                    ${multiStudent ? `
+                    <div class="group-merge-row">
+                        <label class="merge-toggle">
+                            <input type="checkbox" ${group.merge ? 'checked' : ''} onchange="toggleMerge(${groupIndex}, this.checked)">
+                            Mesclar irmãos em um único PDF (requerimentos + contratos concatenados)
+                        </label>
+                    </div>
+                    <div class="group-output-row" style="${group.merge ? '' : 'display:none'}">
+                        <label>Nome do PDF final</label>
+                        <input type="text"
+                               class="input-filename"
+                               value="${group.suggested_filename}"
+                               onchange="updateGroupFilename(${groupIndex}, this.value)">
+                    </div>
+                    ` : ''}
+                    <table class="students-table sub-table">
+                        <thead>
+                            <tr>
+                                <th>Aluno</th>
+                                <th>Página</th>
+                                <th>Tipo de Contrato</th>
+                                <th>Nome do arquivo individual${group.merge ? ' (se desmarcar mesclar)' : ''}</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
                 `;
-                tbody.appendChild(row);
+                container.appendChild(card);
             });
 
-            document.getElementById('totalStudents').textContent = students.length;
+            const allStudents = groupsData.flatMap(g => g.students);
+            document.getElementById('totalGroups').textContent = groupsData.length;
+            document.getElementById('totalStudents').textContent = allStudents.length;
+            updateReviewBanner(allStudents);
         }
 
-        function updateFilename(index, newName) {
-            if (studentsData[index]) {
-                studentsData[index].suggested_filename = newName;
+        function updateReviewBanner(students) {
+            const banner = document.getElementById('reviewBanner');
+            const pending = students.filter(s => !s.contract_type);
+
+            if (pending.length === 0) {
+                banner.style.display = 'none';
+                banner.innerHTML = '';
+                return;
+            }
+
+            const names = pending.map(s => s.student_name).join(', ');
+            banner.style.display = 'flex';
+            banner.innerHTML = `
+                <span class="review-banner-icon">⚠️</span>
+                <span>
+                    <strong>${pending.length} aluno(s) sem tipo de contrato detectado automaticamente:</strong>
+                    ${names}. Selecione manualmente antes de processar.
+                </span>
+            `;
+        }
+
+        function updateGroupFilename(groupIndex, newName) {
+            groupsData[groupIndex].suggested_filename = newName;
+        }
+
+        function updateIndividualFilename(groupIndex, studentIndex, newName) {
+            groupsData[groupIndex].students[studentIndex].individual_filename = newName;
+        }
+
+        function updateStudentName(groupIndex, studentIndex, newName) {
+            groupsData[groupIndex].students[studentIndex].student_name = newName;
+        }
+
+        function toggleMerge(groupIndex, checked) {
+            groupsData[groupIndex].merge = checked;
+            displayGroups();
+        }
+
+        function updateContractType(groupIndex, studentIndex, contractType) {
+            groupsData[groupIndex].students[studentIndex].contract_type = contractType;
+            displayGroups();
+        }
+
+        function removeStudent(groupIndex, studentIndex) {
+            const group = groupsData[groupIndex];
+            group.students.splice(studentIndex, 1);
+            if (group.students.length === 0) {
+                groupsData.splice(groupIndex, 1);
+            }
+            displayGroups();
+
+            if (groupsData.length === 0) {
+                cancelProcess();
             }
         }
 
-        function updateContractType(index, contractType) {
-            if (studentsData[index]) {
-                studentsData[index].contract_type = contractType;
-            }
-        }
+        function removeGroup(groupIndex) {
+            groupsData.splice(groupIndex, 1);
+            displayGroups();
 
-        function removeStudent(index) {
-            studentsData.splice(index, 1);
-            displayStudents(studentsData);
-            
-            if (studentsData.length === 0) {
+            if (groupsData.length === 0) {
                 cancelProcess();
             }
         }
 
         function cancelProcess() {
-            studentsData = [];
+            groupsData = [];
             document.getElementById('studentsSection').style.display = 'none';
             document.getElementById('uploadSection').style.display = 'block';
             fileInput.value = '';
         }
 
         async function processAll() {
-            if (studentsData.length === 0) {
+            if (groupsData.length === 0) {
                 showAlert('Nenhum aluno para processar', 'error');
                 return;
             }
 
-            // Verificar se deve agrupar irmãos
-            const groupSiblings = document.getElementById('groupSiblings').checked;
+            const allStudents = groupsData.flatMap(g => g.students);
+            const pending = allStudents.filter(s => !s.contract_type);
+            if (pending.length > 0) {
+                showAlert(`Selecione o tipo de contrato para: ${pending.map(s => s.student_name).join(', ')}`, 'warning');
+                return;
+            }
 
-            // Preparar dados para envio
-            const processData = studentsData.map(student => ({
-                student_name: student.student_name,
-                temp_filepath: student.temp_filepath,
-                final_filename: student.suggested_filename,
-                contract_type: student.contract_type
+            const processData = groupsData.map(group => ({
+                group_id: group.group_id,
+                temp_filepath: group.temp_filepath,
+                merge: group.merge,
+                output_filename: group.suggested_filename,
+                students: group.students.map(s => ({
+                    student_name: s.student_name,
+                    page_start: s.page_start,
+                    page_end: s.page_end,
+                    contract_type: s.contract_type,
+                    individual_filename: s.individual_filename
+                }))
             }));
 
             // Mostrar loading
             document.getElementById('studentsSection').style.display = 'none';
-            document.getElementById('loading').querySelector('p').textContent = groupSiblings ? 
-                'Agrupando contratos dos irmãos...' : 'Processando contratos...';
+            document.getElementById('loading').querySelector('p').textContent = 'Processando contratos...';
             document.getElementById('loading').style.display = 'block';
 
             try {
@@ -288,10 +385,7 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ 
-                        students: processData,
-                        group_siblings: groupSiblings
-                    })
+                    body: JSON.stringify({ groups: processData })
                 });
 
                 const data = await response.json();
@@ -354,7 +448,7 @@
         }
 
         function resetApp() {
-            studentsData = [];
+            groupsData = [];
             document.getElementById('resultsSection').style.display = 'none';
             document.getElementById('uploadSection').style.display = 'block';
             fileInput.value = '';

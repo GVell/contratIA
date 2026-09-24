@@ -31,70 +31,130 @@ CONTRACTS = {
     'medio': 'Contrato_EF2_EM.pdf'                   # Ensino Médio
 }
 
-def extract_student_name(pdf_path):
+def extract_text_top_region(pdf_path, page_index=0):
     """
-    Extrai o nome do aluno do PDF de matrícula.
-    Procura por nomes em maiúsculas (padrão dos PDFs).
+    Extrai via OCR o texto da região superior da página (título do
+    formulário + campo "Aluno(a):"). O texto puro extraído por PyMuPDF
+    nesses PDFs vem corrompido (fonte sem mapa Unicode), então OCR é o
+    único método confiável aqui — mesma razão pela qual o segmento/curso
+    já dependia de OCR.
     """
     try:
         doc = fitz.open(pdf_path)
-        text = ""
-        
-        # Extrair texto da primeira página
-        if len(doc) > 0:
-            text = doc[0].get_text()
-        
-        doc.close()
-        
-        # NOVO: Dividir o texto usando 'pdf' como delimitador (case insensitive)
-        parts = re.split(r'pdf', text, flags=re.IGNORECASE)
-        
-        for part in parts:
-            # Pegar apenas sequências de palavras TODAS em maiúsculas
-            # Cada palavra deve ter apenas letras maiúsculas e acentos
-            words = part.split()
-            name_words = []
-            
-            for word in words:
-                # Verificar se a palavra é TODA em maiúsculas (incluindo acentos)
-                if word.isupper() and len(word) >= 2:
-                    name_words.append(word)
-                else:
-                    # Se encontrar palavra minúscula, resetar
-                    if len(name_words) >= 2:  # Já temos um nome válido
-                        break
-                    name_words = []
-            
-            # Se encontrou pelo menos 2 palavras em maiúsculas
-            if len(name_words) >= 2:
-                full_name = ' '.join(name_words)
-                if len(full_name) > 10:  # Nome com mais de 10 caracteres
-                    return full_name
-        
-        # Se não encontrar, retornar o nome do arquivo sem extensão
-        filename = os.path.basename(pdf_path)
-        # Remover extensão .pdf (com ou sem ponto)
-        filename = filename.replace('.pdf', '')
-        # Se termina com 'pdf' (sem ponto), remover
-        if filename.lower().endswith('pdf'):
-            filename = filename[:-3]
-        # Substituir underscores por espaços
-        filename = filename.replace('_', ' ')
-        return filename.strip()
-        
-    except Exception as e:
-        print(f"Erro ao extrair nome: {str(e)}")
-        return "Aluno_Desconhecido"
+        page = doc[page_index]
 
-def extract_text_with_ocr(pdf_path):
+        page_rect = page.rect
+        # Região superior o bastante para cobrir título + campo Aluno(a),
+        # sem entrar nos dados dos pais/responsável logo abaixo.
+        clip_rect = fitz.Rect(0, 0, page_rect.width, page_rect.height * 0.28)
+
+        zoom = 2.2
+        mat = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat, clip=clip_rect)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+        custom_config = r'--psm 6 --oem 3'
+        text = pytesseract.image_to_string(img, lang='por', config=custom_config)
+
+        doc.close()
+        return text
+    except Exception as e:
+        print(f"  [OCR] Erro ao extrair topo da página {page_index}: {str(e)}")
+        return ""
+
+
+def is_new_requerimento_page(top_text):
+    """
+    Uma página inicia um novo requerimento quando traz o título do
+    formulário ou o campo Aluno/Aluna. Páginas sem nenhum dos dois são
+    tratadas como continuação do requerimento anterior.
+    """
+    if not top_text:
+        return False
+    return bool(re.search(r'REQUERIMENTO|Alun[oa0]\s*[:\-]', top_text, re.IGNORECASE))
+
+
+def extract_student_name_from_text(top_text):
+    """
+    Extrai o nome do aluno a partir do texto OCR do topo da página,
+    lendo o campo "Aluno:" / "Aluna:".
+    """
+    if not top_text:
+        return None
+
+    match = re.search(r'Alun[oa0]\s*[:\-]?\s*([^\n]+)', top_text, re.IGNORECASE)
+    if not match:
+        return None
+
+    name = match.group(1)
+    # Cortar caso o OCR tenha colado o próximo campo na mesma linha
+    name = re.split(r'G[êeé]nero|N[ºo°]|Data\s+de|Prontu', name, flags=re.IGNORECASE)[0]
+    name = re.sub(r'\s+', ' ', name).strip(' :-.')
+
+    if len(name) < 5:
+        return None
+
+    return name.upper()
+
+
+def sanitize_name_from_filename(pdf_path):
+    """
+    Fallback quando o OCR não consegue ler o nome do aluno: deriva um nome
+    a partir do nome do arquivo.
+    """
+    filename = os.path.basename(pdf_path)
+    filename = re.sub(r'\.pdf$', '', filename, flags=re.IGNORECASE)
+    filename = filename.replace('_', ' ')
+    return filename.strip()
+
+
+def detect_requerimento_blocks(pdf_path):
+    """
+    Divide um PDF em blocos, um por aluno/requerimento.
+
+    A secretaria agora entrega os requerimentos de todos os irmãos de uma
+    família já juntos em um único arquivo (um requerimento por página), em
+    vez de um arquivo por aluno como antes. Esta função identifica onde
+    cada requerimento começa dentro do arquivo, para que nome, segmento e
+    contrato sejam detectados individualmente por aluno — e não apenas uma
+    vez para o arquivo inteiro.
+
+    Retorna uma lista de blocos: {page_start, page_end, top_text}
+    (page_start/page_end são 0-indexed e inclusivos).
+    """
+    doc = fitz.open(pdf_path)
+    total_pages = len(doc)
+    doc.close()
+
+    blocks = []
+    current = None
+
+    for i in range(total_pages):
+        top_text = extract_text_top_region(pdf_path, i)
+
+        if current is None or is_new_requerimento_page(top_text):
+            if current is not None:
+                blocks.append(current)
+            current = {'page_start': i, 'page_end': i, 'top_text': top_text}
+        else:
+            # Continuação do requerimento anterior (formulário com mais de
+            # uma página) — estende o bloco atual em vez de abrir um novo.
+            current['page_end'] = i
+
+    if current is not None:
+        blocks.append(current)
+
+    return blocks
+
+def extract_text_with_ocr(pdf_path, page_index=0):
     """
     Extrai texto do PDF usando OCR (Optical Character Recognition).
     OTIMIZADO: Processa apenas a metade inferior da página (onde está a tabela CURSO)
     """
     try:
-        print("  [OCR] Iniciando extração com OCR...")
+        print(f"  [OCR] Iniciando extração com OCR (página {page_index})...")
         doc = fitz.open(pdf_path)
-        page = doc[0]  # Primeira página
+        page = doc[page_index]
 
         # OTIMIZAÇÃO 1: Processar apenas metade inferior da página
         # A tabela CURSO geralmente está no final do requerimento
@@ -104,8 +164,11 @@ def extract_text_with_ocr(pdf_path):
         # Definir clip para processar apenas a metade inferior
         clip_rect = fitz.Rect(0, half_height, page_rect.width, page_rect.height)
 
-        # OTIMIZAÇÃO 2: Reduzir resolução (1.5x em vez de 2x)
-        zoom = 1.5  # Ainda legível, mas mais rápido (~30% ganho)
+        # Resolução do OCR: 1.5x provou ser insuficiente para ler a tabela
+        # "CURSO" em alguns requerimentos (fonte pequena), causando falha
+        # silenciosa na detecção e um fallback incorreto para o tipo padrão.
+        # 2.2x mantém boa legibilidade em todos os PDFs testados.
+        zoom = 2.2
         mat = fitz.Matrix(zoom, zoom)
 
         # Renderizar apenas a região inferior
@@ -127,21 +190,25 @@ def extract_text_with_ocr(pdf_path):
         print(f"  [OCR] Erro ao extrair com OCR: {str(e)}")
         return ""
 
-def extract_course_segment(pdf_path):
+def extract_course_segment(pdf_path, page_index=0):
     """
     Extrai o curso/segmento do PDF de matrícula usando OCR.
     Retorna o tipo de contrato: 'infantil_fund1_fund2' ou 'medio'
 
     Método principal: OCR (funciona com todos os PDFs de requerimento)
     Fallback: PyMuPDF (caso OCR falhe)
+
+    page_index: página (0-indexed) dentro do PDF onde está este requerimento
+    específico. Um mesmo arquivo pode conter vários requerimentos (irmãos),
+    um por página, então isso NUNCA deve ficar hardcoded em 0.
     """
     doc = None
     try:
-        print(f"\n[DEBUG] Analisando: {os.path.basename(pdf_path)}")
+        print(f"\n[DEBUG] Analisando: {os.path.basename(pdf_path)} (página {page_index})")
 
         # MÉTODO PRINCIPAL: OCR (mais confiável para PDFs de requerimento)
         print("  [OCR] Usando OCR para extração...")
-        ocr_text = extract_text_with_ocr(pdf_path)
+        ocr_text = extract_text_with_ocr(pdf_path, page_index)
 
         if ocr_text and len(ocr_text) > 0:
             ocr_upper = ocr_text.upper()
@@ -194,9 +261,10 @@ def extract_course_segment(pdf_path):
         print("  [FALLBACK] OCR nao encontrou. Tentando PyMuPDF...")
         doc = fitz.open(pdf_path)
         text = ""
+        page = None
 
-        if len(doc) > 0:
-            page = doc[0]
+        if len(doc) > page_index:
+            page = doc[page_index]
             try:
                 text = page.get_text("text")
             except:
@@ -480,117 +548,177 @@ def extract_course_segment(pdf_path):
                     doc.close()
                 return 'infantil_fund1_fund2'
 
-        # Se nem OCR nem PyMuPDF conseguiram, retornar padrão
-        print(f"  [AVISO] Nao foi possivel detectar tipo de contrato. Usando padrao.")
+        # Se nem OCR nem PyMuPDF conseguiram detectar, NÃO adivinhar.
+        # Um default silencioso aqui já causou contratos com o tipo errado
+        # anexado sem que ninguém percebesse. Sinalizar como não detectado
+        # para que a interface force a revisão manual desse aluno.
+        print(f"  [AVISO] Nao foi possivel detectar tipo de contrato. Marcando para revisao manual.")
         doc.close()
-        return 'infantil_fund1_fund2'
-        
+        return None
+
     except Exception as e:
         print(f"Erro ao extrair curso: {str(e)}")
-        # Retornar padrão em caso de erro
+        # Não adivinhar em caso de erro: sinalizar para revisão manual.
         try:
             doc.close()
         except:
             pass
-        return 'infantil_fund1_fund2'
+        return None
 
-def merge_pdfs(enrollment_path, contract_type, output_path):
+def append_student_to_doc(output_doc, enrollment_path, page_start, page_end, contract_type):
     """
-    Mescla o PDF de matrícula com o contrato base selecionado.
+    Anexa ao PDF de saída (já aberto) as páginas de UM requerimento
+    específico (page_start..page_end, inclusive) seguidas do contrato base
+    correspondente ao segmento daquele aluno.
+
+    Usada tanto para gerar um contrato individual quanto para concatenar
+    vários alunos (irmãos) em um único PDF final — nesse caso, cada aluno
+    entra com seu próprio requerimento + seu próprio contrato, na ordem em
+    que aparecem no arquivo original, permitindo tipos de contrato
+    diferentes entre irmãos (ex.: um no Fundamental, outro no Médio).
     """
-    try:
-        # Verificar se o contrato base existe
-        contract_path = os.path.join(CONTRACTS_FOLDER, CONTRACTS[contract_type])
-        if not os.path.exists(contract_path):
-            raise Exception(f"Contrato base não encontrado: {contract_path}")
-        
-        # Criar PDF de saída
-        output_doc = fitz.open()
-        
-        # Adicionar páginas do PDF de matrícula
-        enrollment_doc = fitz.open(enrollment_path)
-        output_doc.insert_pdf(enrollment_doc)
-        enrollment_doc.close()
-        
-        # Adicionar páginas do contrato base
-        contract_doc = fitz.open(contract_path)
-        output_doc.insert_pdf(contract_doc)
-        contract_doc.close()
-        
-        # Salvar o PDF mesclado
-        output_doc.save(output_path)
-        output_doc.close()
-        
-        return True
-        
-    except Exception as e:
-        print(f"Erro ao mesclar PDFs: {str(e)}")
-        return False
+    contract_path = os.path.join(CONTRACTS_FOLDER, CONTRACTS[contract_type])
+    if not os.path.exists(contract_path):
+        raise Exception(f"Contrato base não encontrado: {contract_path}")
+
+    enrollment_doc = fitz.open(enrollment_path)
+    output_doc.insert_pdf(enrollment_doc, from_page=page_start, to_page=page_end)
+    enrollment_doc.close()
+
+    contract_doc = fitz.open(contract_path)
+    output_doc.insert_pdf(contract_doc)
+    contract_doc.close()
+
+
+def build_pdf(items, output_path):
+    """
+    Constrói um PDF final a partir de uma lista de itens (cada um com
+    enrollment_path, page_start, page_end, contract_type) e salva em
+    output_path. Usada tanto para um único aluno (lista de 1 item) quanto
+    para um grupo de irmãos mesclados (lista com vários itens).
+    """
+    output_doc = fitz.open()
+    for item in items:
+        append_student_to_doc(
+            output_doc,
+            item['enrollment_path'],
+            item['page_start'],
+            item['page_end'],
+            item['contract_type']
+        )
+    output_doc.save(output_path)
+    output_doc.close()
 
 def sanitize_filename(name):
     """
-    Remove caracteres inválidos do nome do arquivo.
+    Remove caracteres inválidos do nome do arquivo, preservando a extensão.
+
+    Bug histórico: a versão anterior removia o "." junto com os outros
+    caracteres especiais, então "Fulano.pdf" virava "Fulanopdf" — sem
+    extensão. Isso explica os nomes finais estranhos ("...GONÇALVESpdf")
+    encontrados em contratos_prontos/ de processamentos antigos.
     """
-    # Substituir espaços por underscores e remover caracteres especiais
-    name = re.sub(r'[^\w\s-]', '', name)
-    name = re.sub(r'[\s]+', '_', name)
-    return name
+    base, ext = os.path.splitext(name)
+    base = re.sub(r'[^\w\s-]', '', base)
+    base = re.sub(r'[\s]+', '_', base)
+    return base + ext.lower()
 
 @app.route('/')
 def index():
     return render_template('index_v2.html')
 
+def format_names_list(names):
+    """ 'A' | 'A e B' | 'A, B e C' """
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} e {names[1]}"
+    return ", ".join(names[:-1]) + f" e {names[-1]}"
+
+
 @app.route('/upload', methods=['POST'])
 def upload_files():
     """
-    Recebe múltiplos PDFs de matrícula e extrai informações.
+    Recebe PDFs de requerimento e extrai informações.
+
+    Cada arquivo enviado forma um "grupo" (uma família). A secretaria hoje
+    já entrega os requerimentos de todos os irmãos juntos em um único PDF
+    — um requerimento por página — então um arquivo pode conter 1 ou
+    vários alunos. detect_requerimento_blocks() identifica cada bloco
+    (aluno) dentro do arquivo, e nome/segmento são extraídos individualmente
+    por bloco, nunca uma única vez para o arquivo inteiro.
     """
     try:
         if 'files[]' not in request.files:
             return jsonify({'success': False, 'error': 'Nenhum arquivo enviado'})
-        
+
         files = request.files.getlist('files[]')
-        
+
         if not files or files[0].filename == '':
             return jsonify({'success': False, 'error': 'Nenhum arquivo selecionado'})
-        
-        students = []
-        
+
+        groups = []
+        total_students = 0
+
         for file in files:
-            if file and file.filename.endswith('.pdf'):
-                # Salvar arquivo temporariamente
-                filename = sanitize_filename(file.filename)
-                filepath = os.path.join(UPLOAD_FOLDER, filename)
-                file.save(filepath)
-                
-                # Extrair nome do aluno
-                student_name = extract_student_name(filepath)
-                
-                # Extrair curso/segmento automaticamente
-                contract_type = extract_course_segment(filepath)
-                print(f"[INFO] Aluno: {student_name} -> Tipo de contrato detectado: {contract_type}")
-                
-                # Sugerir nome final do arquivo
-                suggested_name = f"Contrato {student_name}_Colégio Anchieta.pdf"
-                
-                students.append({
-                    'id': len(students),
-                    'original_filename': file.filename,
-                    'temp_filepath': filepath,
+            if not (file and file.filename.lower().endswith('.pdf')):
+                continue
+
+            # Salvar arquivo temporariamente
+            filename = sanitize_filename(file.filename)
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            file.save(filepath)
+
+            blocks = detect_requerimento_blocks(filepath)
+            group_id = f"g{len(groups)}"
+            group_students = []
+
+            for idx, block in enumerate(blocks):
+                student_name = extract_student_name_from_text(block['top_text'])
+                if not student_name:
+                    # Fallback: nome do arquivo (+ sufixo se houver mais de um aluno no arquivo)
+                    base_name = sanitize_name_from_filename(filepath)
+                    student_name = base_name if len(blocks) == 1 else f"{base_name} ({idx + 1})"
+
+                contract_type = extract_course_segment(filepath, block['page_start'])
+                print(f"[INFO] Aluno: {student_name} (págs {block['page_start']}-{block['page_end']}) -> Tipo de contrato: {contract_type}")
+
+                group_students.append({
+                    'id': f"{group_id}-{idx}",
                     'student_name': student_name,
-                    'suggested_filename': suggested_name,
-                    'contract_type': contract_type  # Detectado automaticamente
+                    'contract_type': contract_type,  # Detectado automaticamente (ou None p/ revisão manual)
+                    'page_start': block['page_start'],
+                    'page_end': block['page_end'],
+                    'individual_filename': f"Contrato {student_name}_Colégio Anchieta.pdf"
                 })
-        
-        if not students:
+
+            if not group_students:
+                continue
+
+            names = [s['student_name'] for s in group_students]
+            groups.append({
+                'group_id': group_id,
+                'original_filename': file.filename,
+                'temp_filepath': filepath,
+                'suggested_filename': f"Contrato{'s' if len(names) > 1 else ''} {format_names_list(names)}_Colégio Anchieta.pdf",
+                # Mesclar por padrão quando há mais de um aluno no mesmo arquivo
+                # (irmãos) — reflete o novo fluxo em que a secretaria já entrega
+                # o bloco de irmãos junto. Pode ser desmarcado na revisão.
+                'merge': len(group_students) > 1,
+                'students': group_students
+            })
+            total_students += len(group_students)
+
+        if not groups:
             return jsonify({'success': False, 'error': 'Nenhum PDF válido encontrado'})
-        
+
         return jsonify({
             'success': True,
-            'students': students,
-            'total': len(students)
+            'groups': groups,
+            'total_groups': len(groups),
+            'total_students': total_students
         })
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -598,121 +726,107 @@ def upload_files():
 def process_contracts():
     """
     Processa os contratos em lote com as configurações escolhidas.
+
+    Recebe uma lista de "grupos" (um por arquivo/família enviado no
+    upload). Cada grupo tem seus alunos (com página de origem e tipo de
+    contrato já confirmados na revisão) e uma flag `merge`: quando True
+    (padrão para famílias com mais de um filho), os requerimentos de todos
+    os irmãos do grupo são concatenados com seus respectivos contratos em
+    um único PDF final — permitindo inclusive tipos de contrato diferentes
+    entre irmãos. Quando False, cada aluno do grupo vira um PDF separado.
     """
     try:
         data = request.json
-        students = data.get('students', [])
-        group_siblings = data.get('group_siblings', False)
-        
-        if not students:
-            return jsonify({'success': False, 'error': 'Nenhum aluno para processar'})
-        
+        groups = data.get('groups', [])
+
+        if not groups:
+            return jsonify({'success': False, 'error': 'Nenhum grupo para processar'})
+
+        # Nunca processar um aluno cujo tipo de contrato não foi confirmado
+        # (nem pela detecção automática, nem manualmente pelo usuário).
+        sem_tipo = [
+            s.get('student_name', 'Desconhecido')
+            for g in groups for s in g.get('students', [])
+            if not s.get('contract_type')
+        ]
+        if sem_tipo:
+            return jsonify({
+                'success': False,
+                'error': 'Selecione o tipo de contrato para: ' + ', '.join(sem_tipo)
+            })
+
         results = []
-        
-        # Se agrupar irmãos, processar tudo junto
-        if group_siblings and len(students) > 1:
-            try:
-                # Criar PDF de saída
-                output_doc = fitz.open()
-                student_names = []
-                
-                # Processar cada aluno
-                for student in students:
-                    temp_filepath = student['temp_filepath']
-                    contract_type = student['contract_type']
-                    student_names.append(student['student_name'])
-                    
-                    # Adicionar páginas do PDF de matrícula
-                    enrollment_doc = fitz.open(temp_filepath)
-                    output_doc.insert_pdf(enrollment_doc)
-                    enrollment_doc.close()
-                    
-                    # Adicionar páginas do contrato base
-                    contract_path = os.path.join(CONTRACTS_FOLDER, CONTRACTS[contract_type])
-                    contract_doc = fitz.open(contract_path)
-                    output_doc.insert_pdf(contract_doc)
-                    contract_doc.close()
-                    
-                    # Remover arquivo temporário
-                    if os.path.exists(temp_filepath):
-                        os.remove(temp_filepath)
-                
-                # Formatar nome final: "Contratos NOME1, NOME2 e NOME3_Colégio Anchieta.pdf"
-                if len(student_names) == 2:
-                    names_str = f"{student_names[0]} e {student_names[1]}"
-                else:
-                    names_str = ", ".join(student_names[:-1]) + f" e {student_names[-1]}"
-                
-                final_filename = f"Contratos {names_str}_Colégio Anchieta.pdf"
-                output_path = os.path.join(OUTPUT_FOLDER, final_filename)
-                
-                # Salvar PDF mesclado
-                output_doc.save(output_path)
-                output_doc.close()
-                
-                results.append({
-                    'student_name': names_str,
-                    'filename': final_filename,
-                    'success': True,
-                    'grouped': True
-                })
-                
-                return jsonify({
-                    'success': True,
-                    'results': results,
-                    'total': 1,
-                    'successful': 1,
-                    'failed': 0
-                })
-                
-            except Exception as e:
-                return jsonify({'success': False, 'error': f'Erro ao agrupar contratos: {str(e)}'})
-        
-        # Processar individualmente
-        for student in students:
-            try:
-                # Caminho de entrada
-                temp_filepath = student['temp_filepath']
-                
-                # Caminho de saída
-                final_filename = student['final_filename']
-                output_path = os.path.join(OUTPUT_FOLDER, final_filename)
-                
-                # Tipo de contrato
-                contract_type = student['contract_type']
-                
-                # Mesclar PDFs
-                success = merge_pdfs(temp_filepath, contract_type, output_path)
-                
-                if success:
+        temp_files_used = set()
+
+        for group in groups:
+            temp_filepath = group.get('temp_filepath')
+            students = group.get('students', [])
+            if not students or not temp_filepath:
+                continue
+            temp_files_used.add(temp_filepath)
+
+            merge = bool(group.get('merge')) and len(students) > 1
+
+            if merge:
+                names_str = format_names_list([s['student_name'] for s in students])
+                final_filename = group.get('output_filename') or group.get('suggested_filename')
+                try:
+                    items = [{
+                        'enrollment_path': temp_filepath,
+                        'page_start': s['page_start'],
+                        'page_end': s['page_end'],
+                        'contract_type': s['contract_type']
+                    } for s in students]
+
+                    output_path = os.path.join(OUTPUT_FOLDER, final_filename)
+                    build_pdf(items, output_path)
+
                     results.append({
-                        'student_name': student['student_name'],
+                        'student_name': names_str,
                         'filename': final_filename,
-                        'success': True
+                        'success': True,
+                        'grouped': True
                     })
-                else:
+                except Exception as e:
                     results.append({
-                        'student_name': student['student_name'],
-                        'filename': final_filename,
+                        'student_name': names_str,
+                        'filename': final_filename or '',
                         'success': False,
-                        'error': 'Erro ao mesclar PDFs'
+                        'error': str(e)
                     })
-                
-                # Remover arquivo temporário
-                if os.path.exists(temp_filepath):
-                    os.remove(temp_filepath)
-                    
-            except Exception as e:
-                results.append({
-                    'student_name': student.get('student_name', 'Desconhecido'),
-                    'filename': student.get('final_filename', ''),
-                    'success': False,
-                    'error': str(e)
-                })
-        
-        # Contar sucessos
+            else:
+                for student in students:
+                    final_filename = student.get('individual_filename')
+                    try:
+                        output_path = os.path.join(OUTPUT_FOLDER, final_filename)
+                        build_pdf([{
+                            'enrollment_path': temp_filepath,
+                            'page_start': student['page_start'],
+                            'page_end': student['page_end'],
+                            'contract_type': student['contract_type']
+                        }], output_path)
+
+                        results.append({
+                            'student_name': student['student_name'],
+                            'filename': final_filename,
+                            'success': True
+                        })
+                    except Exception as e:
+                        results.append({
+                            'student_name': student.get('student_name', 'Desconhecido'),
+                            'filename': final_filename or '',
+                            'success': False,
+                            'error': str(e)
+                        })
+
+        # Remover arquivos temporários (uma vez por arquivo, após todos os
+        # grupos que dependem dele terem sido processados)
+        for temp_filepath in temp_files_used:
+            if temp_filepath and os.path.exists(temp_filepath):
+                os.remove(temp_filepath)
+
         successful = sum(1 for r in results if r['success'])
-        
+
         return jsonify({
             'success': True,
             'results': results,
@@ -720,7 +834,7 @@ def process_contracts():
             'successful': successful,
             'failed': len(results) - successful
         })
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
